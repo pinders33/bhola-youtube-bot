@@ -137,7 +137,7 @@ app.get("/oauth2callback", async (req, res) => {
 
 
 // =====================================
-// DETECT BHOLA CHANNEL ID
+// DETECT BHOLA CHANNEL
 // =====================================
 
 async function getBotChannelId() {
@@ -163,17 +163,12 @@ async function getBotChannelId() {
     channels[0].snippet?.title || botChannelId
   );
 
-  console.log(
-    "Bhola Channel ID:",
-    botChannelId
-  );
-
   return botChannelId;
 }
 
 
 // =====================================
-// GET ACTIVE LIVE CHAT ID
+// GET LIVE CHAT ID
 // =====================================
 
 async function getLiveChatId() {
@@ -227,29 +222,82 @@ async function askBhola(
 Tera naam Bhola hai.
 
 Tu Punjabi Meshwave YouTube live chat da
-smart, friendly te natural member hai.
+smart, natural, friendly te useful banda hai.
 
-RULES:
+SAB TON IMPORTANT RULES:
 
-- Mostly Roman Punjabi vich jawab de.
-- Answer short rakhi, normally 1-3 sentences.
-- User jo puchhe, osda direct jawab de.
-- Random joke na suna.
+- HAR valid message da textual jawab de.
+- Kade vi blank, empty ya sirf whitespace response na de.
+- User jo puchhe, pehla OS GAL DA DIRECT JAWAB de.
+- Random joke, shayari, story, motivational line
+  ya hor topic apne wallon shuru na kari.
 - Joke sirf jadon joke mangeya hove.
 - Shayari sirf jadon shayari mangi hove.
-- Same reply repeat na kari.
-- Friendly halka humour allowed.
+
+UNKNOWN / PERSONAL INFO:
+
+- Je kise real bande bare private/personal info pata nahi,
+  guess na kari.
+- Simple natural jawab de:
+  "Menu ni pta ji 😄"
+  ya context de hisaab naal:
+  "Oh Sukh hi dass sakda ji 😄"
+
+Examples:
+
+User: 2+2 kina?
+Answer: 4 ji 😄
+
+User: UAE di capital ki aa?
+Answer: Abu Dhabi aa ji.
+
+User: Sukh di gf kithe aa?
+Answer: Menu ni pta ji 😄 Sukh nu hi pucho.
+
+User: Aman ajj kithe aa?
+Answer: Menu ni pta ji, Aman hi dass sakda.
+
+User: tu ki kr reha?
+Answer: Bas live mehfil sambhal reha aa 😄
+
+User: tera ki haal aa?
+Answer: Vadiya ji 😎
+
+STYLE:
+
+- Mostly Roman Punjabi use kar.
+- Punjabi-English mix allowed.
+- Normally 1-3 short sentences.
+- Answer natural hove.
+- Same fixed reply baar-baar repeat na kari.
+- Friendly halka humour allowed,
+  par relevant hona chahida.
 - Galat facts invent na kari.
-- Je sure nahi, clearly keh.
-- Apne aap nu AI, chatbot, language model,
-  software ya API na keh.
-- Je koi puche "tu kaun aa?" keh:
-  "Main Bhola aa 😎 Punjabi Meshwave di live mehfil da banda."
-- Punjabi Meshwave nu PMW vi keha ja sakda.
-- Pinder Sidhu channel host/creator hai.
-- Har reply ch apna naam repeat na kari.
+- Je sure nahi, clearly keh ke sure nahi.
 - Har reply ch emoji zaroori nahi.
+- Har reply ch apna naam repeat na kari.
+- Har jawab de end ch question zaroori nahi.
 - User de sawal ton topic na badal.
+- User di private information guess na kari.
+
+IDENTITY:
+
+Je koi puche:
+"tu kaun aa?"
+"who are you?"
+"tera naam ki aa?"
+
+Jawab:
+"Main Bhola aa 😎 Punjabi Meshwave di live mehfil da banda."
+
+Apne aap nu AI, chatbot, language model,
+software, Groq, GPT ya API na keh.
+
+CHANNEL CONTEXT:
+
+- Channel: Punjabi Meshwave
+- PMW = Punjabi Meshwave
+- Pinder Sidhu channel host/creator hai.
 `;
 
     const response =
@@ -271,8 +319,8 @@ RULES:
             }
           ],
 
-          temperature: 0.6,
-          max_tokens: 160
+          temperature: 0.35,
+          max_tokens: 120
         },
         {
           headers: {
@@ -288,7 +336,11 @@ RULES:
 
     let answer =
       response.data?.choices?.[0]
-        ?.message?.content || "";
+        ?.message?.content;
+
+    if (typeof answer !== "string") {
+      answer = "";
+    }
 
     answer = answer
       .replace(/\r/g, " ")
@@ -298,10 +350,10 @@ RULES:
 
     if (!answer) {
       console.log(
-        "Groq returned empty reply ⚠️"
+        "Groq gave blank reply - fallback used"
       );
 
-      return "Haan ji, dasso 😄";
+      return "Menu ehda pata ni ji 😄";
     }
 
     return answer;
@@ -313,7 +365,7 @@ RULES:
       error.message
     );
 
-    return "Ik sec ji, Bhola da dimaag thoda load ch aa 😄";
+    return "Ik sec ji 😄 hun jawab dubara pucho.";
   }
 }
 
@@ -396,10 +448,7 @@ async function processMessage(
   const authorChannelId =
     item.authorDetails?.channelId || "";
 
-  // =====================================
-  // IGNORE BHOLA'S OWN MESSAGES
-  // =====================================
-
+  // Ignore Bhola's own messages
   if (
     botChannelId &&
     authorChannelId === botChannelId
@@ -423,10 +472,7 @@ async function processMessage(
   const lower =
     text.toLowerCase();
 
-  // =====================================
-  // ONLY REPLY WHEN BHOLA IS CALLED
-  // =====================================
-
+  // Reply only when Bhola is called
   const calledBhola =
     lower.includes("bhola") ||
     text.includes("ਭੋਲਾ");
@@ -466,7 +512,7 @@ async function processMessage(
     !answer.trim()
   ) {
     console.log(
-      "Empty Bhola reply blocked ✅"
+      "Empty answer blocked ✅"
     );
 
     return;
@@ -504,7 +550,6 @@ async function processMessage(
     );
   }
 
-  // Anti-spam cooldown
   await new Promise(
     resolve =>
       setTimeout(resolve, 2500)
@@ -542,10 +587,7 @@ async function checkChat() {
     const messages =
       response.data.items || [];
 
-    // =====================================
-    // FIRST POLL: IGNORE OLD CHAT
-    // =====================================
-
+    // First poll: ignore old messages
     if (firstPoll) {
       for (const item of messages) {
         if (item?.id) {
