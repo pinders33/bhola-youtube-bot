@@ -1,16 +1,15 @@
-// ======================================================
+// ============================================================
 // BHOLA YOUTUBE LIVE BOT
-// Cloudflare Workers Version
-// ======================================================
+// Cloudflare Worker - Stable Fast Polling Version
+// ============================================================
 
-// In-memory state during one Worker invocation.
-// Across invocations we recover from recent YouTube chat
-// and use timestamps to avoid replying to old messages.
-let botChannelId = null;
+const seenMessageIds = new Set();
 
-// ======================================================
-// HELPERS
-// ======================================================
+let cachedBotChannelId = null;
+
+// ============================================================
+// BASIC HELPERS
+// ============================================================
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -24,15 +23,6 @@ function cleanText(value) {
     .trim();
 }
 
-function jsonResponse(data, status = 200) {
-  return new Response(JSON.stringify(data, null, 2), {
-    status,
-    headers: {
-      "content-type": "application/json; charset=UTF-8"
-    }
-  });
-}
-
 function htmlResponse(html, status = 200) {
   return new Response(html, {
     status,
@@ -42,9 +32,42 @@ function htmlResponse(html, status = 200) {
   });
 }
 
-// ======================================================
-// ENV CHECK
-// ======================================================
+function jsonResponse(data, status = 200) {
+  return new Response(
+    JSON.stringify(data, null, 2),
+    {
+      status,
+      headers: {
+        "content-type":
+          "application/json; charset=UTF-8"
+      }
+    }
+  );
+}
+
+function rememberMessage(id) {
+  if (!id) return;
+
+  seenMessageIds.add(id);
+
+  // Prevent unlimited memory growth
+  if (seenMessageIds.size > 1000) {
+    const values =
+      Array.from(seenMessageIds);
+
+    seenMessageIds.clear();
+
+    for (
+      const value of values.slice(-500)
+    ) {
+      seenMessageIds.add(value);
+    }
+  }
+}
+
+// ============================================================
+// REQUIRED ENVIRONMENT VARIABLES
+// ============================================================
 
 function checkEnvironment(env) {
   const required = [
@@ -55,7 +78,10 @@ function checkEnvironment(env) {
     "TARGET_VIDEO_ID"
   ];
 
-  const missing = required.filter((key) => !env[key]);
+  const missing =
+    required.filter(
+      (key) => !env[key]
+    );
 
   return {
     ok: missing.length === 0,
@@ -63,63 +89,108 @@ function checkEnvironment(env) {
   };
 }
 
-// ======================================================
-// GOOGLE OAUTH
-// ======================================================
+// ============================================================
+// GOOGLE ACCESS TOKEN
+// ============================================================
 
 async function getGoogleAccessToken(env) {
-  const body = new URLSearchParams();
+  const body =
+    new URLSearchParams();
 
-  body.set("client_id", env.GOOGLE_CLIENT_ID);
-  body.set("client_secret", env.GOOGLE_CLIENT_SECRET);
-  body.set("refresh_token", env.GOOGLE_REFRESH_TOKEN);
-  body.set("grant_type", "refresh_token");
+  body.set(
+    "client_id",
+    env.GOOGLE_CLIENT_ID
+  );
+
+  body.set(
+    "client_secret",
+    env.GOOGLE_CLIENT_SECRET
+  );
+
+  body.set(
+    "refresh_token",
+    env.GOOGLE_REFRESH_TOKEN
+  );
+
+  body.set(
+    "grant_type",
+    "refresh_token"
+  );
 
   const response = await fetch(
     "https://oauth2.googleapis.com/token",
     {
       method: "POST",
+
       headers: {
-        "content-type": "application/x-www-form-urlencoded"
+        "content-type":
+          "application/x-www-form-urlencoded"
       },
+
       body
     }
   );
 
   const data = await response.json();
 
-  if (!response.ok || !data.access_token) {
-    console.log("Google token error:", JSON.stringify(data));
+  if (
+    !response.ok ||
+    !data.access_token
+  ) {
+    console.log(
+      "❌ Google token error:",
+      JSON.stringify(data)
+    );
 
     throw new Error(
       data.error_description ||
       data.error ||
-      "Could not refresh Google access token"
+      "Google access token failed"
     );
   }
+
+  console.log(
+    "✅ Google access token ready"
+  );
 
   return data.access_token;
 }
 
-// ======================================================
-// GOOGLE AUTH URL
-// ======================================================
+// ============================================================
+// GOOGLE OAUTH URL
+// ============================================================
 
-function getGoogleAuthUrl(request, env) {
-  const requestUrl = new URL(request.url);
+function getGoogleAuthUrl(
+  request,
+  env
+) {
+  const currentUrl =
+    new URL(request.url);
 
   const redirectUri =
     env.GOOGLE_REDIRECT_URI ||
-    `${requestUrl.origin}/oauth2callback`;
+    `${currentUrl.origin}/oauth2callback`;
 
-  const params = new URLSearchParams({
-    client_id: env.GOOGLE_CLIENT_ID,
-    redirect_uri: redirectUri,
-    response_type: "code",
-    access_type: "offline",
-    prompt: "consent",
-    scope: "https://www.googleapis.com/auth/youtube"
-  });
+  const params =
+    new URLSearchParams({
+      client_id:
+        env.GOOGLE_CLIENT_ID,
+
+      redirect_uri:
+        redirectUri,
+
+      response_type:
+        "code",
+
+      access_type:
+        "offline",
+
+      prompt:
+        "consent",
+
+      scope:
+        "https://www.googleapis.com/auth/youtube"
+    });
 
   return (
     "https://accounts.google.com/o/oauth2/v2/auth?" +
@@ -127,13 +198,19 @@ function getGoogleAuthUrl(request, env) {
   );
 }
 
-// ======================================================
-// OAUTH CALLBACK
-// ======================================================
+// ============================================================
+// GOOGLE OAUTH CALLBACK
+// ============================================================
 
-async function oauthCallback(request, env) {
-  const url = new URL(request.url);
-  const code = url.searchParams.get("code");
+async function oauthCallback(
+  request,
+  env
+) {
+  const url =
+    new URL(request.url);
+
+  const code =
+    url.searchParams.get("code");
 
   if (!code) {
     return htmlResponse(
@@ -146,21 +223,41 @@ async function oauthCallback(request, env) {
     env.GOOGLE_REDIRECT_URI ||
     `${url.origin}/oauth2callback`;
 
-  const body = new URLSearchParams();
+  const body =
+    new URLSearchParams();
 
   body.set("code", code);
-  body.set("client_id", env.GOOGLE_CLIENT_ID);
-  body.set("client_secret", env.GOOGLE_CLIENT_SECRET);
-  body.set("redirect_uri", redirectUri);
-  body.set("grant_type", "authorization_code");
+
+  body.set(
+    "client_id",
+    env.GOOGLE_CLIENT_ID
+  );
+
+  body.set(
+    "client_secret",
+    env.GOOGLE_CLIENT_SECRET
+  );
+
+  body.set(
+    "redirect_uri",
+    redirectUri
+  );
+
+  body.set(
+    "grant_type",
+    "authorization_code"
+  );
 
   const response = await fetch(
     "https://oauth2.googleapis.com/token",
     {
       method: "POST",
+
       headers: {
-        "content-type": "application/x-www-form-urlencoded"
+        "content-type":
+          "application/x-www-form-urlencoded"
       },
+
       body
     }
   );
@@ -168,30 +265,27 @@ async function oauthCallback(request, env) {
   const data = await response.json();
 
   if (!response.ok) {
-    console.log("OAuth callback error:", JSON.stringify(data));
-
     return htmlResponse(
-      `<h2>OAuth failed</h2>
-       <pre>${cleanText(
-         data.error_description || data.error
-       )}</pre>`,
+      `<h2>OAuth failed ❌</h2>
+       <p>${cleanText(
+         data.error_description ||
+         data.error ||
+         "Unknown OAuth error"
+       )}</p>`,
       500
     );
   }
 
-  const refreshToken = data.refresh_token;
-
-  if (!refreshToken) {
+  if (!data.refresh_token) {
     return htmlResponse(`
       <h2>Bhola connected ✅</h2>
 
       <p>
-        Google did not return a new refresh token.
+        Google ne nava refresh token nahi ditta.
       </p>
 
       <p>
-        If you already have GOOGLE_REFRESH_TOKEN,
-        keep using it.
+        Existing GOOGLE_REFRESH_TOKEN use kar sakde ho.
       </p>
     `);
   }
@@ -200,24 +294,22 @@ async function oauthCallback(request, env) {
     <h2>Bhola connected ✅</h2>
 
     <p>
-      Copy the token below and add it to
-      Cloudflare as GOOGLE_REFRESH_TOKEN.
+      Niche refresh token aa.
+      Cloudflare ch GOOGLE_REFRESH_TOKEN update karo.
     </p>
 
     <textarea
       style="width:90%;height:140px"
       readonly
-    >${refreshToken}</textarea>
+    >${data.refresh_token}</textarea>
 
-    <p>
-      Keep this token private.
-    </p>
+    <p>Eh token private rakho.</p>
   `);
 }
 
-// ======================================================
-// YOUTUBE API REQUEST
-// ======================================================
+// ============================================================
+// YOUTUBE API HELPER
+// ============================================================
 
 async function youtubeRequest(
   endpoint,
@@ -228,9 +320,14 @@ async function youtubeRequest(
     `https://www.googleapis.com/youtube/v3/${endpoint}`,
     {
       ...options,
+
       headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "content-type": "application/json",
+        Authorization:
+          `Bearer ${accessToken}`,
+
+        "content-type":
+          "application/json",
+
         ...(options.headers || {})
       }
     }
@@ -246,77 +343,89 @@ async function youtubeRequest(
 
   if (!response.ok) {
     console.log(
-      "YouTube API error:",
+      "❌ YouTube API:",
       response.status,
       JSON.stringify(data)
     );
 
-    const message =
+    throw new Error(
       data?.error?.message ||
-      `YouTube API HTTP ${response.status}`;
-
-    throw new Error(message);
+      `YouTube API ${response.status}`
+    );
   }
 
   return data;
 }
 
-// ======================================================
-// DETECT BOT CHANNEL
-// ======================================================
+// ============================================================
+// BOT YOUTUBE CHANNEL
+// ============================================================
 
-async function getBotChannelId(accessToken) {
-  if (botChannelId) {
-    return botChannelId;
+async function getBotChannelId(
+  accessToken
+) {
+  if (cachedBotChannelId) {
+    return cachedBotChannelId;
   }
 
-  const params = new URLSearchParams({
-    part: "snippet",
-    mine: "true"
-  });
+  const params =
+    new URLSearchParams({
+      part: "snippet",
+      mine: "true"
+    });
 
-  const data = await youtubeRequest(
-    `channels?${params}`,
-    accessToken
-  );
+  const data =
+    await youtubeRequest(
+      `channels?${params}`,
+      accessToken
+    );
 
-  const channel = data.items?.[0];
+  const channel =
+    data.items?.[0];
 
   if (!channel?.id) {
     throw new Error(
-      "Authenticated YouTube bot channel not found"
+      "Authenticated Bhola channel not found"
     );
   }
 
-  botChannelId = channel.id;
+  cachedBotChannelId =
+    channel.id;
 
   console.log(
-    "Bhola channel:",
-    channel.snippet?.title || channel.id
+    "✅ Bhola channel:",
+    channel.snippet?.title ||
+    channel.id
   );
 
-  return botChannelId;
+  return channel.id;
 }
 
-// ======================================================
+// ============================================================
 // GET LIVE CHAT ID
-// ======================================================
+// ============================================================
 
 async function getLiveChatId(
   accessToken,
   videoId
 ) {
-  const params = new URLSearchParams({
-    part: "liveStreamingDetails",
-    id: videoId
-  });
+  const params =
+    new URLSearchParams({
+      part:
+        "liveStreamingDetails",
 
-  const data = await youtubeRequest(
-    `videos?${params}`,
-    accessToken
-  );
+      id:
+        videoId
+    });
 
-  const video = data.items?.[0];
+  const data =
+    await youtubeRequest(
+      `videos?${params}`,
+      accessToken
+    );
+
+  const video =
+    data.items?.[0];
 
   if (!video) {
     throw new Error(
@@ -325,20 +434,62 @@ async function getLiveChatId(
   }
 
   const liveChatId =
-    video.liveStreamingDetails?.activeLiveChatId;
+    video
+      .liveStreamingDetails
+      ?.activeLiveChatId;
 
   if (!liveChatId) {
     throw new Error(
-      "Live chat is not active on TARGET_VIDEO_ID"
+      "Live chat is not active"
     );
   }
+
+  console.log(
+    "✅ Live chat connected"
+  );
 
   return liveChatId;
 }
 
-// ======================================================
-// GROQ / BHOLA AI
-// ======================================================
+// ============================================================
+// READ LIVE CHAT
+// ============================================================
+
+async function getChatMessages(
+  accessToken,
+  liveChatId,
+  pageToken = null
+) {
+  const params =
+    new URLSearchParams({
+      liveChatId,
+
+      part:
+        "id,snippet,authorDetails",
+
+      maxResults:
+        "200"
+    });
+
+  if (pageToken) {
+    params.set(
+      "pageToken",
+      pageToken
+    );
+  }
+
+  const data =
+    await youtubeRequest(
+      `liveChat/messages?${params}`,
+      accessToken
+    );
+
+  return data;
+}
+
+// ============================================================
+// GROQ
+// ============================================================
 
 async function askBhola(
   env,
@@ -348,91 +499,94 @@ async function askBhola(
   const systemPrompt = `
 Tera naam Bhola hai.
 
-Tu Punjabi Meshwave YouTube live chat da
-smart, natural, friendly te useful banda hai.
+Tu Punjabi Mashwave YouTube Live da smart,
+natural, funny-but-useful Punjabi banda hai.
 
-SAB TON IMPORTANT RULES:
+IMPORTANT:
 
-- Har valid message da textual jawab de.
-- Kade blank, empty ya whitespace-only jawab na de.
-- User jo puchhe, pehla os gal da DIRECT jawab de.
-- Random joke, shayari, story ya motivational line
-  apne wallon shuru na kari.
-- Joke sirf jadon joke mangeya hove.
-- Shayari sirf jadon shayari mangi hove.
-- Galat facts invent na kari.
-- Je jawab sure nahi, clearly keh de ke sure nahi.
-- Personal/private info guess na kari.
+- Har valid sawaal da direct jawab de.
+- Kade blank response na de.
 - Mostly natural Roman Punjabi use kar.
-- Hindi ch jawab na de.
-- Punjabi-English mix theek aa jadon natural lagge.
+- Hindi use na kari.
+- Punjabi-English mix natural hove ta allowed aa.
 - Normally 1-3 short sentences.
-- Live chat layi concise jawab de.
-- Same fixed reply baar-baar repeat na kari.
+- YouTube live chat layi concise jawab de.
+- User jo puchhe os gal da pehla direct jawab de.
+- Random joke ya shayari apne aap start na kari.
+- Joke sirf jadon mangeya hove.
+- Shayari sirf jadon mangi hove.
+- Same line baar-baar repeat na kari.
+- Galat facts invent na kari.
+- Je sure nahi ta clearly keh "menu sure ni ji".
+- Private information guess na kari.
 - Friendly halka humour allowed.
-- Har reply ch emoji zaroori nahi.
-- Har reply ch Bhola naam repeat na kari.
-- Har jawab de end ch question zaroori nahi.
+- Har line ch emoji zaroori nahi.
+- Har reply ch apna naam na repeat kari.
 - User de topic ton bahar na ja.
-- User nu galat meri/teri pronoun na la.
-- Viewer di gall nu dhyan naal samajh.
+- Meri/teri pronouns carefully use kari.
 
-UNKNOWN / PERSONAL INFO:
+IDENTITY:
 
-Je kise bande bare private information pata nahi:
-"Menu ni pta ji 😄"
-ya context de hisaab naal:
-"Ohnu hi pucho ji 😄"
+Je koi puche:
+tu kaun aa?
+who are you?
+tera naam ki aa?
+
+Jawab:
+Main Bhola aa 😎 Punjabi Mashwave di live mehfil da banda.
+
+Apne aap nu AI, chatbot, GPT, Groq,
+API, software ya language model na keh.
+
+CHANNEL:
+
+Channel = Punjabi Mashwave
+PMW = Punjabi Mashwave
+Host/creator = Pinder Sidhu
+
+UNKNOWN PERSONAL INFO:
+
+Je puche:
+Sukh di gf kithe aa?
+Aman kithe aa?
+Jasveer ajj kithe aa?
+
+Private info guess na kari.
+
+Natural reply:
+Menu ni pta ji 😄 ohnu hi pucho.
 
 EXAMPLES:
 
 User: 2+2 kina?
 Answer: 4 ji 😄
 
-User: UAE di capital ki aa?
+User: UAE di capital?
 Answer: Abu Dhabi aa ji.
 
-User: Sukh di gf kithe aa?
-Answer: Menu ni pta ji 😄 Sukh nu hi pucho.
-
-User: Aman ajj kithe aa?
-Answer: Menu ni pta ji, Aman hi dass sakda.
-
-User: tu ki kr reha?
-Answer: Bas live mehfil sambhal reha aa 😄
-
-User: tera ki haal aa?
+User: tera ki haal?
 Answer: Vadiya ji 😎
 
-IDENTITY:
-
-Je koi puche:
-"tu kaun aa?"
-"who are you?"
-"tera naam ki aa?"
-
-Jawab natural tareeke naal:
-"Main Bhola aa 😎 Punjabi Meshwave di live mehfil da banda."
-
-Apne aap nu AI, chatbot, language model,
-software, Groq, GPT ya API na keh.
-
-CHANNEL CONTEXT:
-
-- Channel: Punjabi Meshwave
-- PMW = Punjabi Meshwave
-- Pinder Sidhu channel host/creator hai.
+User: tu ki krda?
+Answer: Bas live mehfil sambhal reha aa 😄
 `;
 
   try {
+    console.log(
+      `🤖 Asking Groq: ${question}`
+    );
+
     const response = await fetch(
       "https://api.groq.com/openai/v1/chat/completions",
       {
         method: "POST",
 
         headers: {
-          Authorization: `Bearer ${env.GROQ_API_KEY}`,
-          "content-type": "application/json"
+          Authorization:
+            `Bearer ${env.GROQ_API_KEY}`,
+
+          "content-type":
+            "application/json"
         },
 
         body: JSON.stringify({
@@ -447,65 +601,85 @@ CHANNEL CONTEXT:
             },
             {
               role: "user",
+
               content:
-                `YouTube username: ${username}\n` +
+                `Viewer: ${username}\n` +
                 `Message: ${question}`
             }
           ],
 
-          temperature: 0.35,
-          max_tokens: 120
+          temperature:
+            0.45,
+
+          max_tokens:
+            120
         })
       }
     );
 
-    const data = await response.json();
+    const data =
+      await response.json();
 
     if (!response.ok) {
       console.log(
-        "Groq API error:",
+        "❌ Groq error:",
         response.status,
         JSON.stringify(data)
       );
 
-      return "Ik sec ji 😄 dubara pucho.";
+      return (
+        "Ik sec ji 😄 dubara pucho."
+      );
     }
 
     let answer =
-      data?.choices?.[0]?.message?.content || "";
+      data?.choices?.[0]
+        ?.message?.content || "";
 
-    answer = cleanText(answer);
+    answer =
+      cleanText(answer);
 
     if (!answer) {
-      return "Menu ehda pata ni ji 😄";
+      answer =
+        "Menu ehda pata ni ji 😄";
     }
 
-    // YouTube chat message limit safety.
+    console.log(
+      `✅ AI reply: ${answer}`
+    );
+
     return answer.slice(0, 330);
 
   } catch (error) {
     console.log(
-      "Groq request failed:",
-      error?.message || String(error)
+      "❌ Groq request error:",
+      error?.message ||
+      String(error)
     );
 
-    return "Ik sec ji 😄 dubara pucho.";
+    return (
+      "Ik sec ji 😄 dubara pucho."
+    );
   }
 }
 
-// ======================================================
-// SEND YOUTUBE MESSAGE
-// ======================================================
+// ============================================================
+// SEND CHAT MESSAGE
+// ============================================================
 
 async function sendMessage(
   accessToken,
   liveChatId,
   text
 ) {
-  const message = cleanText(text).slice(0, 400);
+  const finalText =
+    cleanText(text).slice(0, 400);
 
-  if (!message) {
-    console.log("Empty reply blocked");
+  if (!finalText) {
+    console.log(
+      "⚠️ Empty reply blocked"
+    );
+
     return;
   }
 
@@ -518,57 +692,78 @@ async function sendMessage(
       body: JSON.stringify({
         snippet: {
           liveChatId,
-          type: "textMessageEvent",
+
+          type:
+            "textMessageEvent",
 
           textMessageDetails: {
-            messageText: message
+            messageText:
+              finalText
           }
         }
       })
     }
   );
-}
 
-// ======================================================
-// GET CHAT MESSAGES
-// ======================================================
-
-async function getChatMessages(
-  accessToken,
-  liveChatId,
-  pageToken = null
-) {
-  const params = new URLSearchParams({
-    liveChatId,
-    part: "snippet,authorDetails",
-    maxResults: "200"
-  });
-
-  if (pageToken) {
-    params.set("pageToken", pageToken);
-  }
-
-  return youtubeRequest(
-    `liveChat/messages?${params}`,
-    accessToken
+  console.log(
+    `✅ REPLY SENT: ${finalText}`
   );
 }
 
-// ======================================================
-// PROCESS ONE MESSAGE
-// ======================================================
+// ============================================================
+// DOES MESSAGE CALL BHOLA?
+// ============================================================
+
+function isBholaCalled(text) {
+  const lower =
+    cleanText(text)
+      .toLowerCase();
+
+  return (
+    lower.includes("bhola") ||
+    lower.includes("bhole") ||
+    lower.includes("@bhola") ||
+    text.includes("ਭੋਲਾ") ||
+    text.includes("ਭੋਲੇ")
+  );
+}
+
+// ============================================================
+// REMOVE BHOLA NAME FROM QUESTION
+// ============================================================
+
+function extractQuestion(text) {
+  return cleanText(text)
+    .replace(/@?bhola/ig, "")
+    .replace(/bhole/ig, "")
+    .replace(/ਭੋਲਾ/g, "")
+    .replace(/ਭੋਲੇ/g, "")
+    .trim();
+}
+
+// ============================================================
+// PROCESS ONE LIVE CHAT MESSAGE
+// ============================================================
 
 async function processMessage(
   env,
   accessToken,
   liveChatId,
-  botId,
-  item,
-  invocationStartedAt
+  botChannelId,
+  item
 ) {
   if (!item?.id) {
     return;
   }
+
+  // DUPLICATE PROTECTION
+  if (
+    seenMessageIds.has(item.id)
+  ) {
+    return;
+  }
+
+  rememberMessage(item.id);
 
   if (
     item.snippet?.type !==
@@ -577,29 +772,14 @@ async function processMessage(
     return;
   }
 
-  const authorId =
-    item.authorDetails?.channelId || "";
+  const authorChannelId =
+    item.authorDetails?.channelId ||
+    "";
 
-  // Never answer Bhola's own message.
+  // DON'T ANSWER OWN BHOLA MESSAGE
   if (
-    botId &&
-    authorId === botId
-  ) {
-    return;
-  }
-
-  const publishedAt =
-    item.snippet?.publishedAt
-      ? Date.parse(item.snippet.publishedAt)
-      : 0;
-
-  // Important:
-  // On first page of every Worker run YouTube can return
-  // recent history. Ignore messages older than the current
-  // run to avoid replying again to old chat.
-  if (
-    publishedAt &&
-    publishedAt < invocationStartedAt - 5000
+    authorChannelId ===
+    botChannelId
   ) {
     return;
   }
@@ -609,30 +789,29 @@ async function processMessage(
       ?.textMessageDetails
       ?.messageText || "";
 
-  const cleaned = cleanText(text);
-
-  if (!cleaned) {
-    return;
-  }
-
-  const lower = cleaned.toLowerCase();
-
-  const calledBhola =
-    lower.includes("bhola") ||
-    cleaned.includes("ਭੋਲਾ");
-
-  if (!calledBhola) {
+  if (!cleanText(text)) {
     return;
   }
 
   const username =
-    item.authorDetails?.displayName ||
+    item.authorDetails
+      ?.displayName ||
     "viewer";
 
-  let question = cleaned
-    .replace(/@?bhola/ig, "")
-    .replace(/ਭੋਲਾ/g, "")
-    .trim();
+  console.log(
+    `💬 Message received | ${username}: ${text}`
+  );
+
+  if (!isBholaCalled(text)) {
+    console.log(
+      "↪️ Bhola not called - ignored"
+    );
+
+    return;
+  }
+
+  let question =
+    extractQuestion(text);
 
   if (!question) {
     question =
@@ -640,43 +819,39 @@ async function processMessage(
   }
 
   console.log(
-    `Question from ${username}: ${question}`
+    `🔥 BHOLA CALLED by ${username}`
   );
 
-  const answer = await askBhola(
-    env,
-    username,
-    question
+  console.log(
+    `❓ Question: ${question}`
   );
 
-  const finalReply = cleanText(
-    `@${username} ${answer}`
-  ).slice(0, 400);
+  const answer =
+    await askBhola(
+      env,
+      username,
+      question
+    );
 
-  if (!finalReply) {
-    return;
-  }
+  const finalReply =
+    cleanText(
+      `@${username} ${answer}`
+    ).slice(0, 400);
 
   await sendMessage(
     accessToken,
     liveChatId,
     finalReply
   );
-
-  console.log(
-    `Bhola replied to ${username}`
-  );
-
-  // Avoid sending chat messages too aggressively.
-  await sleep(1500);
 }
 
-// ======================================================
-// BOT LOOP
-// ======================================================
+// ============================================================
+// MAIN BHOLA RUN
+// ============================================================
 
 async function runBhola(env) {
-  const envCheck = checkEnvironment(env);
+  const envCheck =
+    checkEnvironment(env);
 
   if (!envCheck.ok) {
     throw new Error(
@@ -685,15 +860,17 @@ async function runBhola(env) {
     );
   }
 
-  console.log("Bhola run starting");
-
-  const invocationStartedAt = Date.now();
+  console.log(
+    "🚀 Bhola run starting"
+  );
 
   const accessToken =
     await getGoogleAccessToken(env);
 
-  const botId =
-    await getBotChannelId(accessToken);
+  const botChannelId =
+    await getBotChannelId(
+      accessToken
+    );
 
   const liveChatId =
     await getLiveChatId(
@@ -701,108 +878,161 @@ async function runBhola(env) {
       env.TARGET_VIDEO_ID
     );
 
-  console.log("Live chat connected");
+  // --------------------------------------------------------
+  // FIRST REQUEST = BASELINE
+  // --------------------------------------------------------
 
-  let nextPageToken = null;
+  const baseline =
+    await getChatMessages(
+      accessToken,
+      liveChatId
+    );
 
-  // Keep one cron invocation alive for about 52 seconds.
-  // Cron fires every minute, so the next invocation starts
-  // shortly after this one ends.
+  let nextPageToken =
+    baseline.nextPageToken ||
+    null;
+
+  console.log(
+    `📥 Baseline messages: ${
+      baseline.items?.length || 0
+    }`
+  );
+
+  // Remember existing history so it does not get answered
+  for (
+    const item of baseline.items || []
+  ) {
+    rememberMessage(item.id);
+  }
+
+  console.log(
+    "✅ Baseline ready - waiting for NEW messages"
+  );
+
+  // --------------------------------------------------------
+  // MAIN LOOP
+  // Keep running almost whole minute.
+  // --------------------------------------------------------
+
   const finishAt =
-    Date.now() + 52000;
+    Date.now() + 54000;
 
-  let firstRequest = true;
+  let cycle = 0;
 
-  while (Date.now() < finishAt) {
-    try {
-      const data = await getChatMessages(
-        accessToken,
-        liveChatId,
-        nextPageToken
+  while (
+    Date.now() < finishAt
+  ) {
+    cycle++;
+
+    const youtubeWait =
+      Number(
+        baseline
+          .pollingIntervalMillis
+      ) || 3000;
+
+    // Don't hit YouTube faster than allowed.
+    const waitTime =
+      Math.max(
+        2500,
+        Math.min(
+          youtubeWait,
+          5000
+        )
       );
 
-      const items = data.items || [];
+    await sleep(waitTime);
 
-      // On first request, ignore recent history from before
-      // this invocation. processMessage also checks time.
+    if (
+      Date.now() >= finishAt
+    ) {
+      break;
+    }
+
+    try {
+      const data =
+        await getChatMessages(
+          accessToken,
+          liveChatId,
+          nextPageToken
+        );
+
+      if (
+        data.nextPageToken
+      ) {
+        nextPageToken =
+          data.nextPageToken;
+      }
+
+      const items =
+        data.items || [];
+
+      console.log(
+        `🔄 Poll ${cycle}: ${items.length} new item(s)`
+      );
+
       for (const item of items) {
         await processMessage(
           env,
           accessToken,
           liveChatId,
-          botId,
-          item,
-          invocationStartedAt
+          botChannelId,
+          item
         );
       }
 
-      nextPageToken =
-        data.nextPageToken ||
-        nextPageToken;
-
-      const youtubeWait =
-        Number(data.pollingIntervalMillis) ||
-        5000;
-
-      // Never poll faster than YouTube requests.
-      const wait = Math.max(
-        youtubeWait,
-        3000
-      );
-
-      firstRequest = false;
-
-      if (
-        data.offlineAt
-      ) {
+      if (data.offlineAt) {
         console.log(
-          "YouTube live has ended"
+          "🛑 Live has ended"
         );
+
         break;
       }
-
-      if (
-        Date.now() + wait >= finishAt
-      ) {
-        break;
-      }
-
-      await sleep(wait);
 
     } catch (error) {
       console.log(
-        "Chat loop error:",
-        error?.message || String(error)
+        "❌ Poll error:",
+        error?.message ||
+        String(error)
       );
 
-      // Stop this run and allow next Cron invocation to retry.
       break;
     }
   }
 
-  console.log("Bhola run finished");
+  console.log(
+    "✅ Bhola run finished"
+  );
 
   return {
     ok: true,
-    botChannelId: botId,
-    videoId: env.TARGET_VIDEO_ID
+    botChannelId,
+    videoId:
+      env.TARGET_VIDEO_ID
   };
 }
 
-// ======================================================
+// ============================================================
 // CLOUDFLARE WORKER
-// ======================================================
+// ============================================================
 
 export default {
 
-  // ----------------------------------------------------
-  // NORMAL WEB REQUESTS
-  // ----------------------------------------------------
+  // ==========================================================
+  // HTTP
+  // ==========================================================
 
-  async fetch(request, env, ctx) {
-    const url = new URL(request.url);
+  async fetch(
+    request,
+    env,
+    ctx
+  ) {
+    const url =
+      new URL(request.url);
 
-    // Home page
+    // --------------------------------------------------------
+    // HOME
+    // --------------------------------------------------------
+
     if (
       request.method === "GET" &&
       url.pathname === "/"
@@ -811,7 +1041,9 @@ export default {
         checkEnvironment(env);
 
       return htmlResponse(`
-        <h2>Bhola YouTube Bot 😎</h2>
+        <h2>
+          Bhola YouTube Bot 😎
+        </h2>
 
         <p>
           Cloudflare Worker running ✅
@@ -823,7 +1055,9 @@ export default {
             envCheck.ok
               ? "✅ Ready"
               : "⚠️ Missing: " +
-                envCheck.missing.join(", ")
+                envCheck
+                  .missing
+                  .join(", ")
           }
         </p>
 
@@ -838,10 +1072,19 @@ export default {
             Check status
           </a>
         </p>
+
+        <p>
+          <a href="/run">
+            Run Bhola now
+          </a>
+        </p>
       `);
     }
 
-    // Google OAuth start
+    // --------------------------------------------------------
+    // AUTH
+    // --------------------------------------------------------
+
     if (
       request.method === "GET" &&
       url.pathname === "/auth"
@@ -857,15 +1100,22 @@ export default {
       }
 
       return Response.redirect(
-        getGoogleAuthUrl(request, env),
+        getGoogleAuthUrl(
+          request,
+          env
+        ),
         302
       );
     }
 
-    // OAuth callback
+    // --------------------------------------------------------
+    // OAUTH CALLBACK
+    // --------------------------------------------------------
+
     if (
       request.method === "GET" &&
-      url.pathname === "/oauth2callback"
+      url.pathname ===
+        "/oauth2callback"
     ) {
       return oauthCallback(
         request,
@@ -873,7 +1123,10 @@ export default {
       );
     }
 
-    // Status endpoint
+    // --------------------------------------------------------
+    // STATUS
+    // --------------------------------------------------------
+
     if (
       request.method === "GET" &&
       url.pathname === "/status"
@@ -883,16 +1136,25 @@ export default {
 
       return jsonResponse({
         bot: "Bhola",
-        platform: "Cloudflare Workers",
-        configured: envCheck.ok,
-        missing: envCheck.missing,
-        targetVideoConfigured:
-          Boolean(env.TARGET_VIDEO_ID)
+        runtime:
+          "Cloudflare Worker",
+
+        configured:
+          envCheck.ok,
+
+        missing:
+          envCheck.missing,
+
+        videoId:
+          env.TARGET_VIDEO_ID ||
+          null
       });
     }
 
-    // Manual test run.
-    // Opening /run will trigger one bot cycle.
+    // --------------------------------------------------------
+    // MANUAL RUN
+    // --------------------------------------------------------
+
     if (
       request.method === "GET" &&
       url.pathname === "/run"
@@ -904,12 +1166,13 @@ export default {
         return jsonResponse({
           message:
             "Bhola run completed ✅",
+
           ...result
         });
 
       } catch (error) {
         console.log(
-          "Manual run error:",
+          "❌ Manual run:",
           error?.message ||
           String(error)
         );
@@ -917,6 +1180,7 @@ export default {
         return jsonResponse(
           {
             ok: false,
+
             error:
               error?.message ||
               String(error)
@@ -934,25 +1198,28 @@ export default {
     );
   },
 
-  // ----------------------------------------------------
-  // CRON - RUNS EVERY MINUTE
-  // ----------------------------------------------------
+  // ==========================================================
+  // CRON
+  // ==========================================================
 
   async scheduled(
     controller,
     env,
     ctx
   ) {
+    console.log(
+      "⏰ CRON started"
+    );
+
     ctx.waitUntil(
-      runBhola(env).catch(
-        (error) => {
+      runBhola(env)
+        .catch((error) => {
           console.log(
-            "Scheduled Bhola error:",
+            "❌ Scheduled error:",
             error?.message ||
             String(error)
           );
-        }
-      )
+        })
     );
   }
 };
