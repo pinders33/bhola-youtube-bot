@@ -213,37 +213,64 @@ async function getLiveChatId() {
 // ASK GROQ
 // =====================================
 
-async function askBhola(
-  username,
-  question
-) {
+async function askBhola(username, question) {
   try {
+
     const systemPrompt = `
-Tera naam Bhola hai.
+Tera naam Bhola aa.
+
+"Bhola", "Bhole", "ਭੋਲਾ" te "ਭੋਲੇ"
+sare tere naam nu address karde ne.
+
+Koi vi ehna vicho kise form naal tenu bulave,
+oh Bhola nu hi bula reha hai.
+
+Apne aap nu introduce karde hoye:
+"Main Bhola aa 😎"
 
 Tu Punjabi Meshwave YouTube live chat da
 smart, natural, friendly te useful banda hai.
 
+
 SAB TON IMPORTANT RULES:
 
 - HAR valid message da textual jawab de.
-- Kade vi blank, empty ya sirf whitespace response na de.
+- Kade blank ya empty response na de.
 - User jo puchhe, pehla OS GAL DA DIRECT JAWAB de.
-- Random joke, shayari, story, motivational line
-  ya hor topic apne wallon shuru na kari.
+- Random topic shuru na kari.
 - Joke sirf jadon joke mangeya hove.
 - Shayari sirf jadon shayari mangi hove.
+- User de sawal nu properly samajh ke answer de.
+- Bina reason Pinder da naam har answer ch na lai.
+- Same fixed response baar-baar repeat na kari.
+
+
+LANGUAGE:
+
+- Mostly natural Roman Punjabi ch gall kar.
+- Punjabi-English mix allowed.
+- Hindi style avoid kar.
+- Viewer jis style ch gall kare,
+  possible hove taan ose natural style ch answer de.
+- Normally 1-3 short sentences.
+- YouTube live chat layi concise reply de.
+
 
 UNKNOWN / PERSONAL INFO:
 
-- Je kise real bande bare private/personal info pata nahi,
-  guess na kari.
-- Simple natural jawab de:
-  "Menu ni pta ji 😄"
-  ya context de hisaab naal:
-  "Oh Sukh hi dass sakda ji 😄"
+Je kise real bande di private/personal information
+tenu pata nahi, guess na kari.
 
 Examples:
+
+User: Sukh di gf kithe aa?
+Answer: Menu ni pta ji 😄 Sukh nu hi pucho.
+
+User: Aman kithe aa?
+Answer: Menu ni pta ji, Aman hi dass sakda.
+
+
+NORMAL QUESTIONS:
 
 User: 2+2 kina?
 Answer: 4 ji 😄
@@ -251,53 +278,48 @@ Answer: 4 ji 😄
 User: UAE di capital ki aa?
 Answer: Abu Dhabi aa ji.
 
-User: Sukh di gf kithe aa?
-Answer: Menu ni pta ji 😄 Sukh nu hi pucho.
-
-User: Aman ajj kithe aa?
-Answer: Menu ni pta ji, Aman hi dass sakda.
-
 User: tu ki kr reha?
 Answer: Bas live mehfil sambhal reha aa 😄
 
 User: tera ki haal aa?
 Answer: Vadiya ji 😎
 
+
 STYLE:
 
-- Mostly Roman Punjabi use kar.
-- Punjabi-English mix allowed.
-- Normally 1-3 short sentences.
-- Answer natural hove.
-- Same fixed reply baar-baar repeat na kari.
-- Friendly halka humour allowed,
-  par relevant hona chahida.
+- Natural Punjabi banda wang jawab de.
+- Friendly halka humour allowed.
+- Relevant gall hi kar.
 - Galat facts invent na kari.
-- Je sure nahi, clearly keh ke sure nahi.
+- Sure nahi taan clearly keh de.
 - Har reply ch emoji zaroori nahi.
 - Har reply ch apna naam repeat na kari.
-- Har jawab de end ch question zaroori nahi.
-- User de sawal ton topic na badal.
-- User di private information guess na kari.
+- Har answer de end ch question zaroori nahi.
+- Private information guess na kari.
+
 
 IDENTITY:
 
 Je koi puche:
+
 "tu kaun aa?"
 "who are you?"
 "tera naam ki aa?"
+"bhole tu kon aa?"
 
-Jawab:
+Jawab natural form ch:
+
 "Main Bhola aa 😎 Punjabi Meshwave di live mehfil da banda."
 
 Apne aap nu AI, chatbot, language model,
 software, Groq, GPT ya API na keh.
 
+
 CHANNEL CONTEXT:
 
-- Channel: Punjabi Meshwave
-- PMW = Punjabi Meshwave
-- Pinder Sidhu channel host/creator hai.
+Channel: Punjabi Meshwave
+PMW = Punjabi Meshwave
+Pinder Sidhu channel host/creator hai.
 `;
 
     const response =
@@ -359,6 +381,7 @@ CHANNEL CONTEXT:
     return answer;
 
   } catch (error) {
+
     console.error(
       "Groq error:",
       error.response?.data ||
@@ -374,10 +397,8 @@ CHANNEL CONTEXT:
 // SEND YOUTUBE MESSAGE
 // =====================================
 
-async function sendMessage(
-  liveChatId,
-  text
-) {
+async function sendMessage(liveChatId, text) {
+
   const cleanText =
     String(text || "")
       .replace(/\r/g, " ")
@@ -389,7 +410,6 @@ async function sendMessage(
     console.log(
       "Blocked empty YouTube message ✅"
     );
-
     return;
   }
 
@@ -414,10 +434,8 @@ async function sendMessage(
 // PROCESS MESSAGE
 // =====================================
 
-async function processMessage(
-  item,
-  liveChatId
-) {
+async function processMessage(item, liveChatId) {
+
   if (!item?.id) {
     return;
   }
@@ -469,13 +487,15 @@ async function processMessage(
     return;
   }
 
-  const lower =
-    text.toLowerCase();
+  // =====================================
+  // BHOLA / BHOLE DETECTION
+  // =====================================
 
-  // Reply only when Bhola is called
   const calledBhola =
-    lower.includes("bhola") ||
-    text.includes("ਭੋਲਾ");
+    /(?:^|\s|@)(?:bhola|bhole)(?=\s|$|[!?.,:;])/i
+      .test(text) ||
+    text.includes("ਭੋਲਾ") ||
+    text.includes("ਭੋਲੇ");
 
   if (!calledBhola) {
     return;
@@ -486,15 +506,19 @@ async function processMessage(
       ?.displayName ||
     "viewer";
 
+  // Remove Bhola/Bhole from actual question
   let question =
     text
-      .replace(/@?bhola/ig, "")
+      .replace(/@?(?:bhola|bhole)/ig, "")
       .replace(/ਭੋਲਾ/g, "")
+      .replace(/ਭੋਲੇ/g, "")
+      .replace(/\s+/g, " ")
       .trim();
 
+  // Someone only says "Bhola/Bhole"
   if (!question) {
     question =
-      "Sat sri akaal da short friendly reply de.";
+      "Viewer ne tenu naam naal bulaya hai. Short natural friendly reply de.";
   }
 
   console.log(
@@ -533,6 +557,7 @@ async function processMessage(
   }
 
   try {
+
     await sendMessage(
       liveChatId,
       finalReply
@@ -543,6 +568,7 @@ async function processMessage(
     );
 
   } catch (error) {
+
     console.error(
       "YouTube send error:",
       error.response?.data ||
@@ -563,6 +589,7 @@ async function processMessage(
 
 async function checkChat() {
   try {
+
     const liveChatId =
       await getLiveChatId();
 
@@ -589,6 +616,7 @@ async function checkChat() {
 
     // First poll: ignore old messages
     if (firstPoll) {
+
       for (const item of messages) {
         if (item?.id) {
           seenMessages.add(item.id);
@@ -598,10 +626,11 @@ async function checkChat() {
       firstPoll = false;
 
       console.log(
-        "Old chat loaded. Waiting for new Bhola messages ✅"
+        "Old chat loaded. Waiting for new Bhola/Bhole messages ✅"
       );
 
     } else {
+
       for (const item of messages) {
         await processMessage(
           item,
@@ -621,6 +650,7 @@ async function checkChat() {
     );
 
   } catch (error) {
+
     console.error(
       "Bhola chat error:",
       error.response?.data ||
@@ -640,6 +670,7 @@ async function checkChat() {
 // =====================================
 
 async function startBhola() {
+
   if (botStarted) {
     return;
   }
@@ -647,6 +678,7 @@ async function startBhola() {
   botStarted = true;
 
   if (!REFRESH_TOKEN) {
+
     console.log(
       "GOOGLE_REFRESH_TOKEN missing ⚠️"
     );
@@ -656,6 +688,7 @@ async function startBhola() {
   }
 
   if (!GROQ_API_KEY) {
+
     console.log(
       "GROQ_API_KEY missing ⚠️"
     );
@@ -665,6 +698,7 @@ async function startBhola() {
   }
 
   try {
+
     await getBotChannelId();
 
     console.log(
@@ -677,6 +711,7 @@ async function startBhola() {
     );
 
   } catch (error) {
+
     botStarted = false;
 
     console.error(
@@ -696,6 +731,7 @@ app.listen(
   PORT,
   "0.0.0.0",
   () => {
+
     console.log(
       `Bhola server running on ${PORT}`
     );
